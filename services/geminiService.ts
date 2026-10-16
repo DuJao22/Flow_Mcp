@@ -4,14 +4,10 @@ import { FlowSchema, FlowContext } from '../types';
 import { keyManager } from './keyManager';
 import { brainService } from './brainService';
 import { mcpService } from './mcpService';
+import { geminiModelDiscovery } from './geminiModelDiscovery';
 
 /**
- * Lista de modelos Gemini válidos suportados em ordem de preferência
- */
-const GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-
-/**
- * Valida uma chave de API fazendo uma requisição mínima
+ * Valida uma chave de API fazendo uma requisição mínima no melhor modelo disponível
  */
 export const validateGeminiKey = async (rawApiKey: string): Promise<{ valid: boolean; error?: string }> => {
   const apiKey = rawApiKey.replace(/^["'“”‘’]|["'“”‘’]$/g, '').trim();
@@ -20,8 +16,9 @@ export const validateGeminiKey = async (rawApiKey: string): Promise<{ valid: boo
   }
 
   let lastErrorMsg = 'Erro desconhecido ao conectar com o Google Gemini';
+  const modelsToTry = await geminiModelDiscovery.getModelChain(apiKey);
 
-  for (const model of GEMINI_MODELS) {
+  for (const model of modelsToTry) {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
@@ -70,8 +67,9 @@ export const generateFlowFromPrompt = async (userPrompt: string, context?: FlowC
         };
     }
 
-    // Tenta cada modelo disponível em sequência se o primeiro falhar
-    for (const modelName of GEMINI_MODELS) {
+    // Tenta cada modelo disponível em sequência (ordenados dinamicamente por prioridade e disponibilidade)
+    const modelsToTry = await geminiModelDiscovery.getModelChain(activeKey);
+    for (const modelName of modelsToTry) {
       try {
         const ai = new GoogleGenAI({ apiKey: activeKey });
         
@@ -151,4 +149,61 @@ export const generateFlowFromPrompt = async (userPrompt: string, context?: FlowC
     text: `❌ **Falha Total no Pool de Chaves**\n\nTodas as ${statusInfo.total} chaves retornaram erro. A última falha foi: ${lastError}${userHelp}`, 
     flowData: undefined 
   };
+};
+
+export const generateRawText = async (prompt: string): Promise<string> => {
+  const statusInfo = JSON.parse(keyManager.getStatus());
+  const maxRetries = Math.max(statusInfo.total * 2, 3);
+  const labKey = keyManager.getLabKey();
+  const keysToTry: string[] = [];
+  if (labKey) keysToTry.push(labKey);
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const activeKey = keysToTry[attempt] || keyManager.getActiveKey();
+    if (!activeKey) break;
+
+    const modelsToTry = await geminiModelDiscovery.getModelChain(activeKey);
+    for (const modelName of modelsToTry) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: activeKey });
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt
+        });
+
+        if (response && response.text) {
+          return response.text;
+        }
+      } catch (error: any) {
+        const errorMsg = error.message || "";
+        if (error.status === 429 || error.status === 403 || errorMsg.includes('429') || errorMsg.includes('403')) {
+          keyManager.markCurrentKeyAsFailed(errorMsg);
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback para o endpoint server-side proxy
+  try {
+    const res = await fetch('/api/gemini/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.text) return data.text;
+    }
+  } catch (e) {
+    console.warn('[geminiService] Proxy fallback failed:', e);
+  }
+
+  throw new Error('Todas as chaves do Google Gemini retornaram erro ou quota esgotada.');
+};
+
+export const geminiService = {
+  validateGeminiKey,
+  generateFlowFromPrompt,
+  generateRawText
 };

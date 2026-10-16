@@ -1,15 +1,26 @@
 
 import React, { useState, useEffect } from 'react';
 import { keyManager } from '../services/keyManager';
+import { geminiModelDiscovery } from '../services/geminiModelDiscovery';
 
 const KeyStatusPanel: React.FC = () => {
   const [status, setStatus] = useState(JSON.parse(keyManager.getStatus()));
+  const [detectedModel, setDetectedModel] = useState<string>(geminiModelDiscovery.getDetectedModelSync());
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    return keyManager.subscribe((newStatusStr) => {
+    const unsubKey = keyManager.subscribe((newStatusStr) => {
       setStatus(JSON.parse(newStatusStr));
     });
+    const unsubModel = geminiModelDiscovery.subscribe((res) => {
+      setDetectedModel(res.detectedModel);
+    });
+    geminiModelDiscovery.discoverAvailableModels().catch(() => {});
+
+    return () => {
+      unsubKey();
+      unsubModel();
+    };
   }, []);
 
   const keyDetails = keyManager.getAllKeysStatus();
@@ -64,6 +75,18 @@ const KeyStatusPanel: React.FC = () => {
              >
                 Resetar Falhas
              </button>
+          </div>
+
+          {/* BADGE DE VERSÃO DETECTADA AUTOMATICAMENTE */}
+          <div className="bg-slate-950/80 border border-purple-500/30 rounded-lg p-2.5 mb-3 text-[10px] flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-purple-400">⚡</span>
+              <span className="text-gray-400 font-medium">Modelo Ativo:</span>
+            </div>
+            <span className="text-purple-300 font-mono font-bold bg-purple-950/80 px-2 py-0.5 rounded border border-purple-700/60 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              {detectedModel}
+            </span>
           </div>
           
           <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-1">

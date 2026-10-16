@@ -80,6 +80,38 @@ class KeyManager {
     this.notify();
   }
 
+  /**
+   * Sincroniza credencial de forma segura com o backend (Fase 2)
+   */
+  public async syncCredentialWithServer(provider: string, secret: string): Promise<boolean> {
+    try {
+      const res = await fetch('/api/credentials/set', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, secret })
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Obtém status de credenciais mascaradas do backend (NUNCA expõe o segredo real no frontend)
+   */
+  public async getMaskedCredentialsFromServer(): Promise<any[]> {
+    try {
+      const res = await fetch('/api/credentials/masked');
+      if (res.ok) {
+        const data = await res.json();
+        return data.credentials || [];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
   public setLabKey(key: string) {
     const clean = sanitizeKey(key);
     if (clean) {

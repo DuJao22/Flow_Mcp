@@ -5,6 +5,10 @@ import { mcpService } from '../services/mcpService';
 import { keyManager } from '../services/keyManager';
 import { brainService } from '../services/brainService';
 import { ProfessionalTemplate, PROFESSIONAL_TEMPLATES } from '../services/templateRegistry';
+import { VisualQACriticModal } from './VisualQACriticModal';
+import { OneClickDeployModal } from './OneClickDeployModal';
+import { AutoHealModal } from './AutoHealModal';
+import { AutoHealScore8D } from '../types';
 
 export type { ProfessionalTemplate };
 export { PROFESSIONAL_TEMPLATES };
@@ -186,6 +190,16 @@ export const DesignLabView: React.FC<DesignLabViewProps> = ({ files, onUpdateFil
   const [showFigmaModal, setShowFigmaModal] = useState(false);
   const [figmaUrl, setFigmaUrl] = useState('');
   const [isImportingFigma, setIsImportingFigma] = useState(false);
+
+  // Playwright Visual QA Critic Modal (Fase 4)
+  const [showVisualQAModal, setShowVisualQAModal] = useState(false);
+
+  // Auto-Heal Engine Modal (Fase 5 & 10)
+  const [showAutoHealModal, setShowAutoHealModal] = useState(false);
+  const [autoHealScore, setAutoHealScore] = useState<AutoHealScore8D | null>(null);
+
+  // GitHub & Vercel One-Click Deploy Modal (Fase 5)
+  const [showDeployModal, setShowDeployModal] = useState(false);
 
   // New Page Modal / State
   const [showNewPageModal, setShowNewPageModal] = useState(false);
@@ -704,6 +718,26 @@ export const DesignLabView: React.FC<DesignLabViewProps> = ({ files, onUpdateFil
             )}
           </div>
 
+          {/* Playwright Visual QA & AI Critic Button (Fase 4) */}
+          <button
+            onClick={() => setShowVisualQAModal(true)}
+            className="px-3 py-1.5 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+            title="Executar Auditoria Visual Playwright & AI Critic nos viewports Desktop, Tablet e Mobile"
+          >
+            <span>🎭</span>
+            <span>Visual QA</span>
+          </button>
+
+          {/* GitHub & Vercel One-Click Deploy Button (Fase 5) */}
+          <button
+            onClick={() => setShowDeployModal(true)}
+            className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+            title="Sincronizar com GitHub e publicar em produção na Vercel com 1 clique"
+          >
+            <span>🚀</span>
+            <span>One-Click Deploy</span>
+          </button>
+
           {/* Figma Import Button */}
           <button
             onClick={() => setShowFigmaModal(true)}
@@ -894,6 +928,48 @@ export const DesignLabView: React.FC<DesignLabViewProps> = ({ files, onUpdateFil
               ⚡ {loopStatusText}
             </div>
           )}
+
+          {/* AI QUALITY & AUTO-HEAL CARD (FASE 10) */}
+          <div className="bg-slate-950 border border-purple-500/40 rounded-2xl p-4 space-y-3.5 shadow-xl shadow-purple-950/20">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                <span>🛡️</span> AI QUALITY
+              </span>
+              <span className="text-sm font-black text-purple-400 font-mono">
+                {autoHealScore ? autoHealScore.overall : (criticScore ? criticScore.total : 91)} / 100
+              </span>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-slate-400">Visual</span>
+                <span className="font-bold text-slate-200 font-mono">{autoHealScore ? autoHealScore.visual : 94}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-slate-400">UX</span>
+                <span className="font-bold text-slate-200 font-mono">{autoHealScore ? autoHealScore.ux : 90}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-slate-400">Motion</span>
+                <span className="font-bold text-slate-200 font-mono">{autoHealScore ? autoHealScore.motion : 87}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-slate-400">Mobile</span>
+                <span className="font-bold text-slate-200 font-mono">{autoHealScore ? autoHealScore.responsive : 92}</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-slate-400">Accessibility</span>
+                <span className="font-bold text-slate-200 font-mono">{autoHealScore ? autoHealScore.accessibility : 96}</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowAutoHealModal(true)}
+              className="w-full py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white rounded-xl text-xs font-black tracking-wide shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 transition-all"
+            >
+              <span>✨ AUTO-HEAL</span>
+            </button>
+          </div>
 
           {/* AI CRITIC SCORES BREAKDOWN */}
           <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
@@ -2008,6 +2084,42 @@ export const DesignLabView: React.FC<DesignLabViewProps> = ({ files, onUpdateFil
           </div>
         </div>
       )}
+
+      {/* PLAYWRIGHT VISUAL QA CRITIC MODAL (FASE 4) */}
+      <VisualQACriticModal
+        isOpen={showVisualQAModal}
+        onClose={() => setShowVisualQAModal(false)}
+        htmlContent={htmlContent}
+        onApplyPatchedCode={(newCode) => {
+          setHtmlContent(newCode);
+          if (currentFile) onUpdateFile(currentFile.id, newCode);
+          showToast('🎉 Patches do Visual QA aplicados com sucesso!');
+        }}
+      />
+
+      {/* GITHUB & VERCEL ONE-CLICK DEPLOY MODAL (FASE 5) */}
+      <OneClickDeployModal
+        isOpen={showDeployModal}
+        onClose={() => setShowDeployModal(false)}
+        projectName={currentFile?.name?.replace('.html', '') || 'flow-site'}
+        files={files.map(f => ({
+          path: f.name.startsWith('/') ? f.name : `/${f.name}`,
+          content: f.content
+        }))}
+      />
+
+      {/* AUTO-HEAL MODAL (FASE 5 & 10) */}
+      <AutoHealModal
+        isOpen={showAutoHealModal}
+        onClose={() => setShowAutoHealModal(false)}
+        currentHtml={htmlContent}
+        onApplyFinalHtml={(updatedHtml, score) => {
+          setHtmlContent(updatedHtml);
+          setAutoHealScore(score);
+          if (currentFile) onUpdateFile(currentFile.id, updatedHtml);
+          showToast(`✨ Auto-Heal concluído com Score ${score.overall}/100!`);
+        }}
+      />
     </div>
   );
 };

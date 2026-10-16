@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { CREATOR_CREDIT } from '../constants';
 import { keyManager } from '../services/keyManager';
 import { validateGeminiKey } from '../services/geminiService';
+import { geminiModelDiscovery } from '../services/geminiModelDiscovery';
 import { CreditsCard } from './CreditsCard';
 
 interface SettingsModalProps {
@@ -144,6 +145,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onInstal
              <div className="flex justify-between border-t border-gray-700/50 pt-2">
                 <span>Versão do Sistema</span>
                 <span className="text-gray-200 font-bold">1.5.0 PWA & Rede Neuronal</span>
+              </div>
+              <div className="flex justify-between border-t border-gray-700/50 pt-2">
+                <span>Modelo Gemini (IA)</span>
+                <span className="text-purple-300 font-mono font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  {geminiModelDiscovery.getDetectedModelSync()} (Auto)
+                </span>
               </div>
           </div>
 

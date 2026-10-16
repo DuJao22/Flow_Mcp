@@ -1,5 +1,8 @@
 {
-  "name": "Flow Architect AI com Cerebro IA 2.1",
-  "description": "Plataforma de automação visual com IA estilo n8n. Criação de fluxos via chat, execução em tempo real e orquestração inteligente. Criado por João Layon.",
-  "requestFramePermissions": []
+  "name": "Flow Architect AI - AI Website Architect & MCP Gateway",
+  "description": "Ambiente profissional de criação de websites e landing pages com IA, integração oficial Notion MCP, Figma Dev Mode & Token Sync, Playwright Visual QA e GitHub/Vercel One-Click Deploy.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

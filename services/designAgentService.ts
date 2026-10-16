@@ -2,9 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import { keyManager } from './keyManager';
 import { brainService } from './brainService';
 import { mcpService } from './mcpService';
+import { geminiModelDiscovery } from './geminiModelDiscovery';
 import { DesignCriticScore, DesignProblem, PageVersion } from '../types';
-
-const GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
 
 async function callGeminiApi(promptParts: any[], config?: any): Promise<string> {
   const statusInfo = JSON.parse(keyManager.getStatus());
@@ -19,7 +18,8 @@ async function callGeminiApi(promptParts: any[], config?: any): Promise<string> 
     const activeKey = keysToTry[keyAttempt] || keyManager.getActiveKey();
     if (!activeKey) break;
 
-    for (const model of GEMINI_MODELS) {
+    const modelsToTry = await geminiModelDiscovery.getModelChain(activeKey);
+    for (const model of modelsToTry) {
       try {
         const ai = new GoogleGenAI({ apiKey: activeKey });
         const response = await ai.models.generateContent({

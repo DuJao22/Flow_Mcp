@@ -1,4 +1,4 @@
-import { ProjectMemoryCategories } from '../types';
+import { ProjectMemoryCategories, DesignMemory } from '../types';
 
 export interface BrainMemory {
   id: string;
@@ -273,6 +273,82 @@ export const brainService = {
     }
   },
 
+  /**
+   * Retorna o contexto estruturado do projeto para agentes, geradores e ferramentas MCP
+   */
+  getProjectContext: (): {
+    categories: ProjectMemoryCategories;
+    formattedPrompt: string;
+    memories: BrainMemory[];
+    lastUpdated: number;
+  } => {
+    const categories = brainService.getStructuredCategories();
+    const memories = brainService.getMemories();
+    const formattedPrompt = brainService.getFormattedContext();
+
+    return {
+      categories,
+      formattedPrompt,
+      memories,
+      lastUpdated: Date.now()
+    };
+  },
+
+  /**
+   * Retorna a Memória de Design ativa derivada do Notion MCP ou Figma Token Sync
+   */
+  getDesignMemory: (): DesignMemory | null => {
+    try {
+      const stored = localStorage.getItem('project_design_memory');
+      if (stored) {
+        return JSON.parse(stored);
+      }
+      const figmaStored = localStorage.getItem('figma_project_design_memory');
+      if (figmaStored) {
+        const parsed = JSON.parse(figmaStored);
+        return {
+          brand: parsed.designName || 'Brand Project',
+          visualStyle: ['Modern Clean', 'Tailwind CSS'],
+          colors: {
+            primary: parsed.colors?.primary || '#6366f1',
+            secondary: parsed.colors?.secondary || '#3b82f6',
+            accent: parsed.colors?.accent || '#ec4899',
+            background: parsed.colors?.background || '#090d16',
+            text: parsed.colors?.text || '#f8fafc',
+            raw: Object.values(parsed.colors || {}) as string[]
+          },
+          typography: {
+            headingFont: parsed.typography?.headingFont || 'Plus Jakarta Sans',
+            bodyFont: parsed.typography?.bodyFont || 'Plus Jakarta Sans',
+            raw: [parsed.typography?.headingFont, parsed.typography?.bodyFont].filter(Boolean) as string[]
+          },
+          motion: {
+            style: ['smooth-fade', 'hover-lift'],
+            entrance: 'fade-in-up',
+            transitions: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+          },
+          source: parsed.sourceApi || 'Design Memory',
+          updatedAt: Date.now()
+        };
+      }
+      return null;
+    } catch (e) {
+      console.warn("Erro ao ler Memória de Design:", e);
+      return null;
+    }
+  },
+
+  /**
+   * Salva ou atualiza a Memória de Design no Cérebro do Projeto
+   */
+  saveDesignMemory: (designMemory: DesignMemory): void => {
+    try {
+      localStorage.setItem('project_design_memory', JSON.stringify(designMemory));
+    } catch (e) {
+      console.error("Erro ao salvar Memória de Design:", e);
+    }
+  },
+
   saveStructuredCategories: (categories: ProjectMemoryCategories): void => {
     try {
       localStorage.setItem(STRUCTURED_MEMORY_KEY, JSON.stringify(categories));
@@ -476,7 +552,8 @@ Responda em APENAS 1 frase direta e prática.
 CÓDIGO (Trecho):
 ${htmlContent.substring(0, 3000)}`;
 
-        const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+        const { geminiModelDiscovery } = await import('./geminiModelDiscovery');
+        const modelsToTry = await geminiModelDiscovery.getModelChain(apiKey);
         for (const modelName of modelsToTry) {
           try {
             const response = await ai.models.generateContent({

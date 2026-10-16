@@ -4,6 +4,7 @@ import { brainService } from './brainService';
 import { analyticsService } from './analyticsService';
 import { designAgentService } from './designAgentService';
 import { mcpService } from './mcpService';
+import { geminiModelDiscovery } from './geminiModelDiscovery';
 import { GoogleGenAI } from '@google/genai';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -197,7 +198,7 @@ export class FlowEngine {
 
     const nodeStartTime = Date.now();
     let tokensInNode = 0;
-    let modelNameUsed = 'gemini-3.6-flash';
+    let modelNameUsed = geminiModelDiscovery.getDetectedModelSync();
 
     this.updateNodeStatus(node.id, NodeStatus.RUNNING);
     const nodeInput = this.context['input'] !== undefined ? this.context['input'] : { ...this.context };
@@ -342,7 +343,7 @@ export class FlowEngine {
               try {
                 const ai = new GoogleGenAI({ apiKey: activeKeyPrompt });
                 const res = await ai.models.generateContent({
-                  model: 'gemini-3.6-flash',
+                  model: modelNameUsed,
                   contents: [{ role: 'user', parts: [{ text: promptText }] }],
                   config: { temperature: 0.3 }
                 });
@@ -380,7 +381,7 @@ Input Atual: ${JSON.stringify(nodeInput)}
 Gere um resultado executado com raciocínio de alto padrão em JSON ou texto limpo.
                 `;
                 const res = await ai.models.generateContent({
-                  model: 'gemini-3.6-flash',
+                  model: modelNameUsed,
                   contents: [{ role: 'user', parts: [{ text: agentPrompt }] }]
                 });
                 agentOutput = res.text?.trim() || '';
@@ -568,7 +569,7 @@ ${directive}
                 }
 
                 const brainResponse = await ai.models.generateContent({
-                  model: 'gemini-3.6-flash',
+                  model: modelNameUsed,
                   contents: [{ role: 'user', parts: [{ text: promptText }] }],
                   config: { temperature: 0.2 }
                 });

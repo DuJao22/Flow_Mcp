@@ -1,8 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { mcpClient } from '../services/mcpClient';
 import { mcpService } from '../services/mcpService';
 import { brainService } from '../services/brainService';
-import { MCPTool, MCPServer, MCPPermission, MCPSessionLog } from '../types';
+import { notionContextAgent } from '../services/notionContextAgent';
+import { userVariablesManager } from '../services/userVariablesManager';
+import { VariableGearButton } from './VariableGearButton';
+import { IntegrationVariablesModal } from './IntegrationVariablesModal';
+import { 
+  MCPServer, 
+  MCPTool, 
+  MCPPermission, 
+  MCPSessionLog, 
+  NotionPageSummary,
+  StructuredProjectContext,
+  DesignMemory,
+  IntegrationCategory 
+} from '../types';
 import { McpAutoDiscoveryView } from './McpAutoDiscoveryView';
+import { FigmaExplorerView } from './FigmaExplorerView';
+import { PlaywrightAutomationView } from './PlaywrightAutomationView';
+import { DeployPipelineView } from './DeployPipelineView';
 import { ProfessionalTemplate } from '../services/templateRegistry';
 
 export interface ProjectDesignMemory {
@@ -24,297 +41,212 @@ export interface ProjectDesignMemory {
 }
 
 export const McpToolsPanel: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'tools' | 'servers' | 'discovery' | 'permissions' | 'logs'>('tools');
+  const [activeTab, setActiveTab] = useState<'servers' | 'notion_explorer' | 'figma_explorer' | 'playwright_qa' | 'deploy_pipeline' | 'tools' | 'discovery' | 'permissions' | 'logs'>('servers');
+  const [servers, setServers] = useState<MCPServer[]>(mcpClient.getServers());
   const [tools, setTools] = useState<MCPTool[]>(mcpService.getTools());
-  const [servers, setServers] = useState<MCPServer[]>(mcpService.getServers());
   const [permissions, setPermissions] = useState<MCPPermission[]>(mcpService.getPermissions());
-  const [logs, setLogs] = useState<MCPSessionLog[]>([]);
+  const [logs, setLogs] = useState<MCPSessionLog[]>(mcpClient.getSessionLogs());
 
-  // Active Template state for Notion MCP & Auto-Discovery
+  // Variables & Credentials Modal State (Engrenagenzinha ⚙️)
+  const [isVariablesModalOpen, setIsVariablesModalOpen] = useState(false);
+  const [variablesModalCategory, setVariablesModalCategory] = useState<IntegrationCategory | undefined>(undefined);
+  const [variablesModalVarId, setVariablesModalVarId] = useState<string | undefined>(undefined);
+
+  // Notion Connect & Status State
+  const [notionToken, setNotionToken] = useState<string>(
+    typeof window !== 'undefined' ? (userVariablesManager.getValue('NOTION_INTERNAL_INTEGRATION_TOKEN') || localStorage.getItem('NOTION_MCP_TOKEN') || '') : ''
+  );
+  const [isConnectingNotion, setIsConnectingNotion] = useState(false);
+  const [notionError, setNotionError] = useState<string | null>(null);
+  const [notionSuccessMsg, setNotionSuccessMsg] = useState<string | null>(null);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+
+  // Notion Explorer State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchingNotion, setIsSearchingNotion] = useState(false);
+  const [searchResults, setSearchResults] = useState<NotionPageSummary[]>([]);
+  const [selectedPages, setSelectedPages] = useState<NotionPageSummary[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('NOTION_SELECTED_PAGES');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) { console.warn(e); }
+      }
+    }
+    return [];
+  });
+
+  // Phase 2: Notion Context Agent Extraction State
+  const [isExtractingContext, setIsExtractingContext] = useState(false);
+  const [activeExtractingPageId, setActiveExtractingPageId] = useState<string | null>(null);
+  const [extractedContext, setExtractedContext] = useState<StructuredProjectContext | null>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('notion_extracted_structured_context');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) { console.warn(e); }
+      }
+    }
+    return null;
+  });
+  const [extractedDesignMemory, setExtractedDesignMemory] = useState<DesignMemory | null>(null);
+  const [contextAgentSummary, setContextAgentSummary] = useState<string | null>(null);
+
+  // Template & Design Memory State
   const [activeTemplateId, setActiveTemplateId] = useState<string>(
     typeof window !== 'undefined' ? localStorage.getItem('NOTION_MCP_PAGE_TEMPLATE_ID') || 'saas_ai_platform' : 'saas_ai_platform'
   );
-
-  const handleSelectTemplate = (template: ProfessionalTemplate) => {
-    setActiveTemplateId(template.id);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('NOTION_MCP_PAGE_TEMPLATE_ID', template.id);
-      localStorage.setItem('NOTION_MCP_PAGE_TEMPLATE_LABEL', template.title);
-      localStorage.setItem('NOTION_MCP_PAGE_TEMPLATE_SPECS', template.specs);
-    }
-    try {
-      brainService.addMemory(
-        `[Notion MCP Template Ativo] ${template.title} (${template.id}). Especificações: ${template.specs}`,
-        'rule',
-        'high',
-        'auto'
-      );
-    } catch (e) {
-      console.warn('Erro ao salvar template na memória:', e);
-    }
-  };
-
-  const handleGenerateWithCoPilot = (template: ProfessionalTemplate) => {
-    handleSelectTemplate(template);
-    mcpService.triggerMcpCoPilotBuildSession(`Gerando mega página profissional com o template ${template.title}`);
-  };
-
-  // Custom MCP Server Registration form state
-  const [newServerName, setNewServerName] = useState('');
-  const [newServerEndpoint, setNewServerEndpoint] = useState('');
-  const [newServerDesc, setNewServerDesc] = useState('');
-  const [showAddServerModal, setShowAddServerModal] = useState(false);
-
-  // Figma Token & Workflow State
-  const [figmaToken, setFigmaToken] = useState<string>(
-    typeof window !== 'undefined' ? localStorage.getItem('FIGMA_MCP_TOKEN') || '' : ''
-  );
-  const [figmaTokenSaved, setFigmaTokenSaved] = useState<boolean>(!!figmaToken);
-  const [showTokenSecret, setShowTokenSecret] = useState(false);
-  const [saveNotification, setSaveNotification] = useState<string | null>(null);
-  const [testFigmaUrl, setTestFigmaUrl] = useState('');
-  const [testFigmaResult, setTestFigmaResult] = useState<any>(null);
-  const [isTestingFigma, setIsTestingFigma] = useState(false);
-
-  // Notion MCP State
-  const [notionToken, setNotionToken] = useState<string>(
-    typeof window !== 'undefined' ? localStorage.getItem('NOTION_MCP_TOKEN') || '' : ''
-  );
-  const [notionPageId, setNotionPageId] = useState<string>(
-    typeof window !== 'undefined' ? localStorage.getItem('NOTION_MCP_PAGE_ID') || '' : ''
-  );
-  const [notionResult, setNotionResult] = useState<any>(null);
-  const [isFetchingNotion, setIsFetchingNotion] = useState(false);
-
-  const handleFetchNotionBriefing = async () => {
-    setIsFetchingNotion(true);
-    setNotionResult(null);
-
-    try {
-      const res = await mcpService.executeTool('UX Designer', 'notion_fetch_briefing', {
-        pageId: notionPageId,
-        apiKey: notionToken
-      });
-      setNotionResult(res);
-      setSaveNotification('✅ Diretrizes e Briefing do Notion MCP sincronizados no Cérebro com sucesso!');
-      setTimeout(() => setSaveNotification(null), 4000);
-    } catch (err: any) {
-      console.error('Erro ao conectar com Notion MCP:', err);
-    } finally {
-      setIsFetchingNotion(false);
-    }
-  };
-
-  // Active Project Design Memory State (accessible by Brain Engine)
   const [projectDesignMemory, setProjectDesignMemory] = useState<ProjectDesignMemory | null>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('figma_project_design_memory');
       if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          console.warn('Erro ao carregar figma_project_design_memory:', e);
-        }
+        try { return JSON.parse(saved); } catch (e) { console.warn(e); }
       }
     }
     return null;
   });
 
-  const handleSaveFigmaToken = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('FIGMA_MCP_TOKEN', figmaToken.trim());
-    }
-    setFigmaTokenSaved(!!figmaToken.trim());
-    setSaveNotification(
-      figmaToken.trim() 
-        ? '✅ Token do Figma salvo com sucesso no armazenamento seguro local!' 
-        : 'ℹ️ Token limpo com sucesso.'
-    );
-    setTimeout(() => setSaveNotification(null), 4000);
+  // Modal para adicionar servidor genérico
+  const [showAddServerModal, setShowAddServerModal] = useState(false);
+  const [newServerName, setNewServerName] = useState('');
+  const [newServerEndpoint, setNewServerEndpoint] = useState('');
+  const [newServerDesc, setNewServerDesc] = useState('');
+
+  // Helper para abrir o modal de variáveis com engrenagem
+  const handleOpenVariables = (category?: IntegrationCategory, varId?: string) => {
+    setVariablesModalCategory(category);
+    setVariablesModalVarId(varId);
+    setIsVariablesModalOpen(true);
   };
 
-  const handleClearFigmaToken = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('FIGMA_MCP_TOKEN');
-    }
-    setFigmaToken('');
-    setFigmaTokenSaved(false);
-    setSaveNotification('ℹ️ Token do Figma removido do armazenamento local.');
-    setTimeout(() => setSaveNotification(null), 4000);
-  };
 
-  // IMPORT DESIGN HANDLER: Calls Figma REST API + MCP Tool and updates projectDesignMemory for the Brain Engine
-  const handleImportDesign = async (urlOverride?: string) => {
-    const targetUrl = (urlOverride || testFigmaUrl).trim();
-    if (!targetUrl) return;
+  // Sincroniza status inicial e escuta eventos do MCP Client
+  useEffect(() => {
+    mcpClient.checkNotionStatus().then((srv) => {
+      setServers(mcpClient.getServers());
+    });
 
-    setIsTestingFigma(true);
-    setTestFigmaResult(null);
-
-    let fileKey = 'figma_design_key';
-    let nodeId = '';
-
-    if (targetUrl.includes('/file/')) {
-      fileKey = targetUrl.split('/file/')[1]?.split('/')[0] || fileKey;
-    } else if (targetUrl.includes('/design/')) {
-      fileKey = targetUrl.split('/design/')[1]?.split('/')[0] || fileKey;
-    }
-
-    if (targetUrl.includes('node-id=')) {
-      nodeId = decodeURIComponent(targetUrl.split('node-id=')[1]?.split('&')[0] || '');
-    }
-
-    let restApiData: any = null;
-    let usedSource: 'Figma REST API' | 'Figma MCP Extractor' = 'Figma MCP Extractor';
-
-    // 1. Tenta requisição direta à Figma REST API se token informado
-    const activeToken = figmaToken.trim() || (typeof window !== 'undefined' ? localStorage.getItem('FIGMA_MCP_TOKEN') || '' : '');
-
-    if (activeToken && activeToken !== 'figd_demo_token' && fileKey !== 'figma_design_key') {
-      try {
-        const endpoint = nodeId
-          ? `https://api.figma.com/v1/files/${fileKey}/nodes?ids=${nodeId}`
-          : `https://api.figma.com/v1/files/${fileKey}`;
-
-        const apiRes = await fetch(endpoint, {
-          headers: { 'X-Figma-Token': activeToken }
-        });
-
-        if (apiRes.ok) {
-          restApiData = await apiRes.json();
-          usedSource = 'Figma REST API';
-        }
-      } catch (err) {
-        console.warn('[Figma REST API] Falha na chamada direta à API (CORS ou rede), usando extrator MCP:', err);
+    const unsubscribe = mcpClient.subscribe((event) => {
+      if (event.type === 'SERVER_STATUS_CHANGE') {
+        setServers(mcpClient.getServers());
+      } else if (event.type === 'TOOLS_DISCOVERED') {
+        setTools(mcpService.getTools());
+      } else if (event.type === 'LOG_ADDED') {
+        setLogs(mcpClient.getSessionLogs());
       }
-    }
+    });
 
-    // 2. Executa a ferramenta MCP figma_import_design para registrar logs e extrair tokens
-    let mcpRes: any = null;
+    return () => unsubscribe();
+  }, []);
+
+  const handleConnectNotion = async () => {
+    setIsConnectingNotion(true);
+    setNotionError(null);
+    setNotionSuccessMsg(null);
+
     try {
-      mcpRes = await mcpService.executeTool('Visual Designer', 'figma_import_design', {
-        url: targetUrl,
-        apiToken: activeToken
-      });
-      setTestFigmaResult(mcpRes);
+      const result = await mcpClient.connectNotion(notionToken.trim());
+      if (typeof window !== 'undefined' && notionToken.trim()) {
+        localStorage.setItem('NOTION_MCP_TOKEN', notionToken.trim());
+        userVariablesManager.setValue('NOTION_INTERNAL_INTEGRATION_TOKEN', notionToken.trim());
+      }
+      setNotionSuccessMsg(`Conectado com sucesso! ${result.toolsCount} ferramentas MCP descobertas.`);
+      setShowConnectModal(false);
+      setTimeout(() => setNotionSuccessMsg(null), 5000);
     } catch (err: any) {
-      console.error('Erro na ferramenta MCP figma_import_design:', err);
+      setNotionError(err.message || 'Erro ao autenticar com o Notion MCP');
+    } finally {
+      setIsConnectingNotion(false);
     }
+  };
 
-    // 3. Extrai nós de frame do payload REST API se disponível
-    let extractedFrames: string[] = [];
-    if (restApiData && restApiData.document) {
-      const traverseNodes = (node: any) => {
-        if (!node) return;
-        if (['FRAME', 'COMPONENT', 'SECTION', 'CANVAS'].includes(node.type) && node.name) {
-          extractedFrames.push(node.name);
-        }
-        if (node.children && Array.isArray(node.children)) {
-          node.children.forEach(traverseNodes);
-        }
-      };
-      traverseNodes(restApiData.document);
-    }
-
-    const designName = restApiData?.name || mcpRes?.designName || 'Figma Design System';
-    const frames = extractedFrames.length > 0 ? extractedFrames.slice(0, 8) : (mcpRes?.frames || ['Hero Banner Frame', 'Features Grid', 'Footer CTA']);
-    const colors = mcpRes?.colors || { primary: '#8b5cf6', secondary: '#ec4899', darkBackground: '#090d16', surface: '#1e293b', text: '#f8fafc' };
-    const typography = mcpRes?.typography || { headingFont: 'Plus Jakarta Sans', bodyFont: 'Inter', scaleRatio: 1.25 };
-    const tokens = mcpRes?.tokens || { borderRadius: '16px', containerPadding: '24px', itemGap: '16px', shadowStyle: 'luxury-glow' };
-
-    const newDesignMemory: ProjectDesignMemory = {
-      importedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' - ' + new Date().toLocaleDateString('pt-BR'),
-      figmaUrl: targetUrl,
-      fileKey,
-      nodeId: nodeId || undefined,
-      designName,
-      frames,
-      colors,
-      typography,
-      tokens,
-      sourceApi: usedSource
-    };
-
-    // 4. Armazena no estado local e LocalStorage
-    setProjectDesignMemory(newDesignMemory);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('figma_project_design_memory', JSON.stringify(newDesignMemory));
-    }
-
-    // 5. Grava na Memória Estruturada do Cérebro (Brain Engine)
+  const handleDisconnectNotion = async () => {
     try {
-      const currentStructured = brainService.getStructuredCategories();
-      currentStructured.design = {
-        colors: Object.entries(colors).map(([k, v]) => `${k}: ${v}`).join(', '),
-        typography: `Heading: ${typography.headingFont}, Body: ${typography.bodyFont}, Ratio: ${typography.scaleRatio}`,
-        components: `Figma Frames: ${frames.join(', ')}`,
-        layout: Object.entries(tokens).map(([k, v]) => `${k}: ${v}`).join(', ')
-      };
-      brainService.saveStructuredCategories(currentStructured);
-
-      brainService.addMemory(
-        `[Figma Design Memory - ${fileKey}] Design "${designName}" importado com sucesso via ${usedSource}. Frames: ${frames.join(', ')}. Cores: ${JSON.stringify(colors)}. Tipografia: ${typography.headingFont}/${typography.bodyFont}.`,
-        'rule',
-        'high',
-        'auto'
-      );
-    } catch (memErr) {
-      console.warn('Erro ao atualizar memória do Cérebro com Figma Design:', memErr);
+      await mcpClient.disconnectNotion();
+      setNotionSuccessMsg('Notion MCP desconectado.');
+      setTimeout(() => setNotionSuccessMsg(null), 3000);
+    } catch (e: any) {
+      setNotionError(e.message);
     }
-
-    setIsTestingFigma(false);
   };
 
-  const handleClearDesignMemory = () => {
-    setProjectDesignMemory(null);
+  // Phase 2: Extração de Contexto Estruturado com Notion Context Agent
+  const handleExtractNotionContext = async (page: NotionPageSummary) => {
+    setIsExtractingContext(true);
+    setActiveExtractingPageId(page.id);
+    setNotionError(null);
+    setNotionSuccessMsg(null);
+
+    try {
+      const result = await notionContextAgent.extractProjectContext(page);
+      setExtractedContext(result.structuredContext);
+      setExtractedDesignMemory(result.designMemory);
+      setContextAgentSummary(result.brainIntegrationSummary);
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('notion_extracted_structured_context', JSON.stringify(result.structuredContext));
+      }
+
+      setNotionSuccessMsg(`Contexto do projeto "${result.structuredContext.project.name}" extraído e salvo no Cérebro com proveniência estrita!`);
+      setTimeout(() => setNotionSuccessMsg(null), 6000);
+    } catch (err: any) {
+      console.error('Falha ao extrair contexto via Notion Agent:', err);
+      setNotionError(`Falha na extração de contexto: ${err.message || 'Erro de comunicação com o Notion MCP'}`);
+    } finally {
+      setIsExtractingContext(false);
+      setActiveExtractingPageId(null);
+    }
+  };
+
+  const handleSearchNotion = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSearchingNotion(true);
+    setNotionError(null);
+
+    try {
+      const results = await mcpClient.searchNotion(searchQuery);
+      setSearchResults(results);
+      if (results.length === 0) {
+        setNotionSuccessMsg('Nenhuma página encontrada com este termo.');
+        setTimeout(() => setNotionSuccessMsg(null), 3000);
+      }
+    } catch (err: any) {
+      setNotionError(`Falha na busca Notion: ${err.message}. Verifique a conexão com o Notion MCP.`);
+    } finally {
+      setIsSearchingNotion(false);
+    }
+  };
+
+  const handleToggleSelectPage = (page: NotionPageSummary) => {
+    let updated: NotionPageSummary[];
+    if (selectedPages.some(p => p.id === page.id)) {
+      updated = selectedPages.filter(p => p.id !== page.id);
+    } else {
+      updated = [...selectedPages, page];
+    }
+    setSelectedPages(updated);
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('figma_project_design_memory');
+      localStorage.setItem('NOTION_SELECTED_PAGES', JSON.stringify(updated));
     }
-  };
-
-  const handleRegisterServer = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newServerName.trim() || !newServerEndpoint.trim()) return;
-
-    const addedServer = mcpService.registerServerUrl(
-      newServerName.trim(),
-      newServerEndpoint.trim(),
-      newServerDesc.trim() || 'Servidor MCP Customizado Remoto'
+    // Adiciona na memória do Brain Engine
+    brainService.addMemory(
+      `[Notion Project Context] Página vinculada: "${page.title}" (ID: ${page.id})`,
+      'rule',
+      'high',
+      'auto'
     );
-
-    setServers([...mcpService.getServers()]);
-    setTools([...mcpService.getTools()]);
-    setNewServerName('');
-    setNewServerEndpoint('');
-    setNewServerDesc('');
-    setShowAddServerModal(false);
-  };
-
-  const handleRemoveServer = (serverId: string) => {
-    mcpService.removeServer(serverId);
-    setServers([...mcpService.getServers()]);
-    setTools([...mcpService.getTools()]);
   };
 
   const handleToggleTool = (toolId: string) => {
-    setTools(prev => prev.map(t => t.id === toolId ? { ...t, enabled: !t.enabled } : t));
+    mcpService.toggleTool(toolId);
+    setTools([...mcpService.getTools()]);
   };
 
   const handleTogglePermission = (agentRole: string, toolId: string) => {
-    const existingPerm = permissions.find(p => p.agentRole === agentRole);
-    if (!existingPerm) return;
-
-    let updatedToolIds: string[];
-    if (existingPerm.allowedToolIds.includes(toolId)) {
-      updatedToolIds = existingPerm.allowedToolIds.filter(id => id !== toolId);
-    } else {
-      updatedToolIds = [...existingPerm.allowedToolIds, toolId];
-    }
-
-    mcpService.updatePermission(agentRole, updatedToolIds);
+    mcpService.togglePermission(agentRole, toolId);
     setPermissions([...mcpService.getPermissions()]);
   };
+
+  const notionServer = servers.find(s => s.id === 'notion');
+  const isNotionConnected = notionServer?.status === 'CONNECTED';
 
   return (
     <div className="h-full bg-slate-950 flex flex-col text-slate-100 p-6 space-y-6 overflow-y-auto custom-scrollbar">
@@ -326,20 +258,84 @@ export const McpToolsPanel: React.FC = () => {
             🔌
           </div>
           <div>
-            <h1 className="text-xl font-black text-white tracking-wide flex items-center gap-2">
-              MCP TOOLS REGISTRY
-              <span className="text-[10px] font-mono uppercase bg-indigo-950 text-indigo-300 border border-indigo-800 px-2.5 py-0.5 rounded-full">
-                v1.2 Active
-              </span>
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-black text-white tracking-wide flex items-center gap-2">
+                MCP TOOLS & GATEWAY
+                <span className="text-[10px] font-mono uppercase bg-emerald-950 text-emerald-300 border border-emerald-800 px-2.5 py-0.5 rounded-full">
+                  Streamable HTTP Active
+                </span>
+              </h1>
+              <VariableGearButton 
+                onClick={handleOpenVariables}
+                title="Configurar variáveis de todos os serviços (Notion, Figma, Gemini...)"
+                size="md"
+              />
+            </div>
             <p className="text-xs text-slate-400">
-              Gerenciamento de Model Context Protocol: servidores, ferramentas de navegação, arquivo e conectores externos.
+              Protocolo Model Context Protocol com integração oficial Notion MCP, Agente de Contexto e Gerenciador de Credenciais.
             </p>
           </div>
         </div>
 
         {/* Sub Tabs */}
         <div className="flex items-center bg-slate-900 border border-slate-800 p-1 rounded-2xl overflow-x-auto no-scrollbar shrink-0 w-full sm:w-auto">
+          <button
+            onClick={() => setActiveTab('servers')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap ${
+              activeTab === 'servers' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            🖥️ Servidores ({servers.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('notion_explorer')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'notion_explorer' 
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                : 'text-blue-300 hover:text-white bg-blue-950/40 border border-blue-800/40'
+            }`}
+          >
+            <span>📝</span>
+            <span>Notion Explorer & Context</span>
+            {selectedPages.length > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-blue-400/20 text-blue-200 border border-blue-400/40">
+                {selectedPages.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('figma_explorer')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'figma_explorer' 
+                ? 'bg-gradient-to-r from-violet-600 via-pink-600 to-orange-500 text-white shadow-lg' 
+                : 'text-pink-300 hover:text-white bg-pink-950/40 border border-pink-800/40'
+            }`}
+          >
+            <span>🎨</span>
+            <span>Figma Dev Mode & Tokens</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('playwright_qa')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'playwright_qa' 
+                ? 'bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 text-white shadow-lg' 
+                : 'text-cyan-300 hover:text-white bg-cyan-950/40 border border-cyan-800/40'
+            }`}
+          >
+            <span>🎭</span>
+            <span>Playwright Visual QA</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('deploy_pipeline')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap flex items-center gap-1.5 ${
+              activeTab === 'deploy_pipeline' 
+                ? 'bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 text-white shadow-lg' 
+                : 'text-emerald-300 hover:text-white bg-emerald-950/40 border border-emerald-800/40'
+            }`}
+          >
+            <span>🚀</span>
+            <span>GitHub & Vercel Deploy</span>
+          </button>
           <button
             onClick={() => setActiveTab('tools')}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap ${
@@ -351,22 +347,11 @@ export const McpToolsPanel: React.FC = () => {
           <button
             onClick={() => setActiveTab('discovery')}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap flex items-center gap-1.5 ${
-              activeTab === 'discovery' ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/20' : 'text-purple-300 hover:text-white bg-purple-950/40 border border-purple-800/40'
+              activeTab === 'discovery' ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg' : 'text-purple-300 hover:text-white bg-purple-950/40 border border-purple-800/40'
             }`}
           >
             <span>🔍</span>
-            <span>Auto-Discovery & Templates</span>
-            <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-purple-400/20 text-purple-200 border border-purple-400/40">
-              IA
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveTab('servers')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap ${
-              activeTab === 'servers' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            🖥️ Servidores ({servers.length})
+            <span>Auto-Discovery</span>
           </button>
           <button
             onClick={() => setActiveTab('permissions')}
@@ -378,7 +363,7 @@ export const McpToolsPanel: React.FC = () => {
           </button>
           <button
             onClick={() => {
-              setLogs([...mcpService.getLogs()]);
+              setLogs(mcpClient.getSessionLogs());
               setActiveTab('logs');
             }}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 whitespace-nowrap ${
@@ -390,483 +375,673 @@ export const McpToolsPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* --- TAB: AUTO-DISCOVERY & TEMPLATES --- */}
-      {activeTab === 'discovery' && (
-        <McpAutoDiscoveryView
-          servers={servers}
-          tools={tools}
-          projectDesignMemory={projectDesignMemory}
-          activeTemplateId={activeTemplateId}
-          onSelectTemplate={handleSelectTemplate}
-          onGenerateWithCoPilot={handleGenerateWithCoPilot}
-          onNavigateToTab={(t) => setActiveTab(t)}
-        />
+      {/* Notifications */}
+      {notionSuccessMsg && (
+        <div className="p-3 bg-emerald-950 border border-emerald-800 rounded-2xl text-xs font-mono text-emerald-200 animate-fadeIn flex items-center gap-2">
+          <span>✅</span>
+          <span>{notionSuccessMsg}</span>
+        </div>
+      )}
+      {notionError && (
+        <div className="p-3 bg-rose-950 border border-rose-800 rounded-2xl text-xs font-mono text-rose-200 animate-fadeIn flex items-center gap-2">
+          <span>⚠️</span>
+          <span>{notionError}</span>
+        </div>
+      )}
+
+      {/* --- TAB: SERVERS (PROFESSIONAL MCP SERVERS LIST) --- */}
+      {activeTab === 'servers' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
+            <div>
+              <h3 className="text-sm font-extrabold text-white">MCP SERVERS REGISTRY</h3>
+              <p className="text-xs text-slate-400">Servidores MCP com transporte Streamable HTTP, SSE e in-memory.</p>
+            </div>
+            <button
+              onClick={() => setShowAddServerModal(!showAddServerModal)}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+            >
+              <span>➕</span>
+              <span>Registrar Servidor MCP</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* NOTION MCP SERVER CARD */}
+            <div className={`border rounded-3xl p-6 transition-all shadow-xl space-y-4 ${
+              isNotionConnected 
+                ? 'bg-gradient-to-br from-blue-950/70 via-slate-900 to-indigo-950/70 border-blue-800/80 shadow-blue-950/30' 
+                : 'bg-slate-900/90 border-slate-800'
+            }`}>
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-white text-black flex items-center justify-center text-xl font-bold shadow-md">
+                    N
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-base font-black text-white font-mono">
+                        NOTION
+                      </h4>
+                      <VariableGearButton 
+                        onClick={() => handleOpenVariables('notion', 'NOTION_INTERNAL_INTEGRATION_TOKEN')}
+                        title="Configurar credenciais e variáveis do Notion MCP"
+                        size="sm"
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400">https://mcp.notion.com/mcp</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className={`px-3 py-1 text-[10px] font-bold rounded-full uppercase border flex items-center gap-1.5 ${
+                    isNotionConnected
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                      : notionServer?.status === 'CONNECTING'
+                      ? 'bg-amber-950 text-amber-300 border-amber-800 animate-pulse'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                    <span className={`w-2 h-2 rounded-full ${isNotionConnected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                    {isNotionConnected ? 'Connected' : notionServer?.status === 'CONNECTING' ? 'Connecting...' : 'Not Connected'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-slate-950/80 p-3 rounded-2xl border border-slate-800/80">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Transport:</span>
+                  <span className="text-blue-300 font-bold">Streamable HTTP</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Discovered Tools:</span>
+                  <span className="text-white font-bold">{notionServer?.toolsCount || 0}</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Servidor MCP oficial do Notion para acesso estruturado a briefings, brand guidelines, bases de dados e regras de design.
+              </p>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+                {isNotionConnected ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('notion_explorer')}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+                    >
+                      <span>🔍 Abrir Explorer & Context</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('tools')}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all"
+                    >
+                      View Tools ({notionServer?.toolsCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDisconnectNotion}
+                      className="px-3.5 py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-xl text-xs font-bold transition-all ml-auto"
+                    >
+                      Disconnect
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowConnectModal(true)}
+                    className="w-full py-2.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2"
+                  >
+                    <span>⚡ Connect Notion MCP</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* FIGMA MCP SERVER CARD */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 via-purple-600 to-indigo-600 flex items-center justify-center text-xl shadow-md">
+                    🎨
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-base font-black text-white font-mono">
+                        FIGMA
+                      </h4>
+                      <VariableGearButton 
+                        onClick={() => handleOpenVariables('figma', 'FIGMA_PERSONAL_ACCESS_TOKEN')}
+                        title="Configurar Figma Access Token e File Key"
+                        size="sm"
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400">http://localhost:3005/mcp</span>
+                  </div>
+                </div>
+
+                <span className="px-3 py-1 bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold rounded-full uppercase flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-slate-500" />
+                  Not Connected
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-slate-950/80 p-3 rounded-2xl border border-slate-800/80">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Transport:</span>
+                  <span className="text-purple-300 font-bold">SSE (Server-Sent Events)</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Tools:</span>
+                  <span className="text-white font-bold">0</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Extração de Design Tokens, hierarquia de frames e estilos direto do Figma Dev Mode.
+              </p>
+
+              <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('figma_explorer')}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-violet-600 via-pink-600 to-orange-500 hover:from-violet-500 hover:to-orange-400 text-white font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
+                >
+                  <span>🎨 Abrir Figma Explorer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenVariables('figma', 'FIGMA_PERSONAL_ACCESS_TOKEN')}
+                  className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all flex items-center justify-center"
+                  title="Configurações de Credenciais Figma"
+                >
+                  <span>⚙️</span>
+                </button>
+              </div>
+            </div>
+
+            {/* PLAYWRIGHT & BROWSER MCP SERVER CARD */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-500 via-teal-600 to-blue-600 flex items-center justify-center text-xl shadow-md">
+                    🌐
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-base font-black text-white font-mono">
+                        PLAYWRIGHT
+                      </h4>
+                      <VariableGearButton 
+                        onClick={() => handleOpenVariables('playwright')}
+                        title="Configurar variáveis do Playwright"
+                        size="sm"
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400">http://localhost:3006/mcp</span>
+                  </div>
+                </div>
+
+                <span className="px-3 py-1 bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold rounded-full uppercase flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-slate-500" />
+                  Not Connected
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-slate-950/80 p-3 rounded-2xl border border-slate-800/80">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Transport:</span>
+                  <span className="text-emerald-300 font-bold">SSE</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Tools:</span>
+                  <span className="text-white font-bold">0</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Navegador virtual para renderização, inspeção DOM, validação de responsividade e AI Critic.
+              </p>
+
+              <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenVariables('playwright')}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5"
+                >
+                  <span>⚙️ Configurar Playwright</span>
+                </button>
+              </div>
+            </div>
+
+            {/* FILESYSTEM MCP SERVER CARD */}
+            <div className="bg-gradient-to-br from-emerald-950/60 via-slate-900 to-slate-900 border border-emerald-800/60 rounded-3xl p-6 space-y-4 shadow-xl">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-600/30 border border-emerald-500/50 flex items-center justify-center text-xl shadow-md">
+                    📁
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-base font-black text-white font-mono">
+                        FILESYSTEM
+                      </h4>
+                      <VariableGearButton 
+                        onClick={() => handleOpenVariables('storage')}
+                        title="Configurar armazenamento e diretórios"
+                        size="sm"
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400">local://filesystem</span>
+                  </div>
+                </div>
+
+                <span className="px-3 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-bold rounded-full uppercase flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  Connected
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-slate-950/80 p-3 rounded-2xl border border-slate-800/80">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Transport:</span>
+                  <span className="text-emerald-300 font-bold">In-Memory / Local</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">Tools:</span>
+                  <span className="text-white font-bold">4 Ativas</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Manipulação e versionamento de arquivos HTML, CSS, JavaScript e assets de landing pages.
+              </p>
+
+              <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('tools')}
+                  className="flex-1 py-2.5 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 font-bold rounded-xl text-xs transition-all"
+                >
+                  Manage Tools
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* --- TAB: NOTION EXPLORER (WORKSPACE BROWSER & PROJECT CONTEXT) --- */}
+      {activeTab === 'notion_explorer' && (
+        <div className="space-y-6">
+          {!isNotionConnected ? (
+            <div className="bg-slate-900/90 border border-blue-900/60 rounded-3xl p-8 text-center space-y-4 max-w-xl mx-auto shadow-2xl">
+              <div className="w-16 h-16 rounded-3xl bg-blue-950 border border-blue-800 flex items-center justify-center text-3xl mx-auto shadow-lg shadow-blue-500/20">
+                📝
+              </div>
+              <h3 className="text-lg font-black text-white">Notion MCP Não Conectado</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Conecte seu Workspace do Notion para pesquisar e importar briefings, personas, cores, copy e diretrizes de landing pages diretamente para o Cérebro da IA.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowConnectModal(true)}
+                className="px-6 py-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20"
+              >
+                ⚡ Conectar Workspace Notion
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              
+              {/* SEARCH BAR */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>🔍</span> NOTION WORKSPACE EXPLORER
+                  </h3>
+                  <span className="text-[10px] text-emerald-400 font-mono">
+                    ● Conexão Ativa com Notion MCP
+                  </span>
+                </div>
+
+                <form onSubmit={handleSearchNotion} className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Pesquisar páginas, briefings, clientes ou databases no Notion..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-white placeholder-slate-500 outline-none focus:border-blue-500 font-mono shadow-inner"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearchingNotion}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-2xl text-xs transition-all shadow-md shrink-0 flex items-center gap-2"
+                  >
+                    {isSearchingNotion ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        <span>Buscando...</span>
+                      </>
+                    ) : (
+                      <span>Pesquisar</span>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {/* SEARCH RESULTS */}
+              {searchResults.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">
+                    Resultados no Notion Workspace ({searchResults.length}):
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {searchResults.map((page) => {
+                      const isSelected = selectedPages.some(p => p.id === page.id);
+                      return (
+                        <div
+                          key={page.id}
+                          className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-blue-950/60 border-blue-600 shadow-lg shadow-blue-950/40'
+                              : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                          }`}
+                          onClick={() => handleToggleSelectPage(page)}
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xl">{page.icon || '📄'}</span>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                                isSelected ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
+                              }`}>
+                                {isSelected ? '✓ Selecionado' : '+ Vincular'}
+                              </span>
+                            </div>
+                            <h5 className="text-xs font-bold text-white leading-snug">{page.title}</h5>
+                            {page.excerpt && (
+                              <p className="text-[11px] text-slate-400 line-clamp-2">{page.excerpt}</p>
+                            )}
+                          </div>
+                          <div className="mt-3 pt-2 border-t border-slate-800/80 text-[9px] font-mono text-slate-500 flex justify-between">
+                            <span>ID: {page.id.substring(0, 8)}...</span>
+                            <span>{page.isDatabase ? 'Database' : 'Página'}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ASSOCIATED PROJECT CONTEXT & AGENT EXTRACTION */}
+              <div className="bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border border-blue-800/60 rounded-3xl p-6 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center text-xl text-white shadow-md">
+                      🧠
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-extrabold text-white">NOTION PROJECT CONTEXT (BRAIN ENGINE)</h4>
+                      <p className="text-xs text-slate-300">Páginas associadas ativas e extração de contexto inteligente pelo Notion Agent.</p>
+                    </div>
+                  </div>
+
+                  <span className="text-xs font-mono text-blue-300 bg-blue-950 px-3 py-1 rounded-xl border border-blue-800">
+                    {selectedPages.length} Fonte(s) Vinculada(s)
+                  </span>
+                </div>
+
+                {selectedPages.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic py-2">
+                    Nenhuma página vinculada ainda. Use a pesquisa acima para selecionar briefings, brand guidelines ou copies.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    {selectedPages.map((page) => {
+                      const isExtracting = isExtractingContext && activeExtractingPageId === page.id;
+                      return (
+                        <div
+                          key={page.id}
+                          className="bg-slate-950 border border-blue-800/80 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-inner"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 overflow-hidden">
+                              <span className="text-xl">{page.icon || '📄'}</span>
+                              <div>
+                                <h5 className="text-xs font-bold text-white truncate max-w-[220px]">{page.title}</h5>
+                                <span className="text-[10px] text-slate-500 font-mono">ID: {page.id.substring(0, 10)}...</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSelectPage(page)}
+                              className="text-slate-500 hover:text-rose-400 text-xs shrink-0 p-1"
+                              title="Remover fonte"
+                            >
+                              ✕
+                            </button>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleExtractNotionContext(page)}
+                              disabled={isExtractingContext}
+                              className="flex-1 py-2 px-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2"
+                            >
+                              {isExtracting ? (
+                                <>
+                                  <div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                                  <span className="text-[11px]">Extraindo Contexto...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span>🧠</span>
+                                  <span className="text-[11px]">Extrair Contexto com Notion Agent</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* STRUCTURED PROJECT CONTEXT DISPLAY (PHASE 2 OUTCOME) */}
+              {extractedContext && (
+                <div className="bg-slate-900 border border-indigo-700/60 rounded-3xl p-6 space-y-5 shadow-2xl animate-fadeIn">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xl text-white shadow-lg">
+                        ✨
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-white uppercase tracking-wider">
+                            CONTEXTO ESTRUTURADO DO PROJETO
+                          </h4>
+                          <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full font-mono font-bold">
+                            Ativo no Brain Engine
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          Extraído do Notion com parsing inteligente e proveniência estrita.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(JSON.stringify(extractedContext, null, 2));
+                          alert('Contexto copiado para a área de transferência em formato JSON!');
+                        }}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-mono transition-all"
+                      >
+                        📋 Copiar JSON
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* PROVENANCE BADGE */}
+                  {extractedContext.provenance && (
+                    <div className="p-3 bg-slate-950/80 border border-indigo-900/50 rounded-2xl flex flex-wrap items-center justify-between text-[11px] font-mono text-slate-400 gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-indigo-400 font-bold">Origem:</span>
+                        <span className="text-white font-bold">{extractedContext.provenance.source}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Page ID:</span>
+                        <span className="text-indigo-300">{extractedContext.provenance.notionPageId}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Data:</span>
+                        <span>{new Date(extractedContext.provenance.retrievedAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* GRID DE CARDS DO CONTEXTO */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    
+                    {/* CARD 1: IDENTIDADE & NEGÓCIO */}
+                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                      <h5 className="text-xs font-bold text-indigo-400 font-mono uppercase flex items-center gap-1.5">
+                        <span>🏢</span> Projeto & Marca
+                      </h5>
+                      <div className="space-y-1.5 text-xs">
+                        <p><strong className="text-slate-400">Nome:</strong> <span className="text-white font-bold">{extractedContext.project.name}</span></p>
+                        <p><strong className="text-slate-400">Marca:</strong> <span className="text-slate-200">{extractedContext.project.brandName}</span></p>
+                        <p><strong className="text-slate-400">Setor:</strong> <span className="text-slate-300">{extractedContext.project.industry || 'Tecnologia / SaaS'}</span></p>
+                        <p><strong className="text-slate-400">Oferta:</strong> <span className="text-slate-300">{extractedContext.business.offer}</span></p>
+                      </div>
+                    </div>
+
+                    {/* CARD 2: PÚBLICO & TOM DE VOZ */}
+                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                      <h5 className="text-xs font-bold text-purple-400 font-mono uppercase flex items-center gap-1.5">
+                        <span>🎯</span> Público & Tom de Voz
+                      </h5>
+                      <div className="space-y-2 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-mono">Público-Alvo:</span>
+                          <span className="text-slate-200">{extractedContext.targetAudience.primary}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-mono">Tom de Voz:</span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {extractedContext.toneOfVoice.map((t, idx) => (
+                              <span key={idx} className="px-2 py-0.5 bg-purple-950 text-purple-300 border border-purple-800 rounded-md text-[10px] font-mono">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* CARD 3: DESIGN TOKENS (CORES & TIPOGRAFIA) */}
+                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                      <h5 className="text-xs font-bold text-pink-400 font-mono uppercase flex items-center gap-1.5">
+                        <span>🎨</span> Design Tokens
+                      </h5>
+                      <div className="space-y-2 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-mono">Paleta de Cores:</span>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            {Object.entries(extractedContext.designTokens.colors).map(([key, val]) => (
+                              <div key={key} className="flex flex-col items-center gap-1">
+                                <div 
+                                  className="w-6 h-6 rounded-lg border border-slate-700 shadow"
+                                  style={{ backgroundColor: val }}
+                                  title={`${key}: ${val}`}
+                                />
+                                <span className="text-[8px] font-mono text-slate-400 uppercase">{key.substring(0, 3)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="pt-1 text-[11px] text-slate-300">
+                          <span className="text-slate-400">Headings:</span> <span className="font-bold text-white">{extractedContext.designTokens.typography.headingFont}</span> | <span className="text-slate-400">Body:</span> <span className="text-white">{extractedContext.designTokens.typography.bodyFont}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* SEÇÕES E ESTRUTURA */}
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+                    <h5 className="text-xs font-bold text-emerald-400 font-mono uppercase flex items-center gap-1.5">
+                      <span>📐</span> Estrutura e Sequência Recomendada de Seções
+                    </h5>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {extractedContext.contentStructure.sections.map((sec, idx) => (
+                        <div key={sec.id || idx} className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-xs flex items-center gap-2">
+                          <span className="w-5 h-5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-mono font-bold flex items-center justify-center">
+                            {idx + 1}
+                          </span>
+                          <span className="text-white font-bold">{sec.title}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">({sec.type})</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* COPY PRINCIPAL */}
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                    <h5 className="text-xs font-bold text-blue-400 font-mono uppercase flex items-center gap-1.5">
+                      <span>✍️</span> Copywriting Estruturado
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-slate-500 uppercase font-mono">Headline Principal:</span>
+                        <p className="text-white font-bold text-sm bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
+                          "{extractedContext.copy.heroHeadline}"
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[10px] text-slate-500 uppercase font-mono">Call to Action Primária (CTA):</span>
+                        <p className="text-emerald-300 font-bold bg-emerald-950/40 p-2.5 rounded-xl border border-emerald-900">
+                          👉 {extractedContext.copy.primaryCta}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- TAB: FIGMA EXPLORER & DEV MODE (FASE 3) --- */}
+      {activeTab === 'figma_explorer' && (
+        <FigmaExplorerView onOpenVariablesModal={handleOpenVariables} />
+      )}
+
+      {/* --- TAB: PLAYWRIGHT BROWSER AUTOMATION & VISUAL QA (FASE 4) --- */}
+      {activeTab === 'playwright_qa' && (
+        <PlaywrightAutomationView onOpenVariablesModal={handleOpenVariables} />
+      )}
+
+      {/* --- TAB: GITHUB & VERCEL DEPLOY PIPELINE (FASE 5) --- */}
+      {activeTab === 'deploy_pipeline' && (
+        <DeployPipelineView onOpenVariablesModal={handleOpenVariables} />
       )}
 
       {/* --- TAB: TOOLS --- */}
       {activeTab === 'tools' && (
         <div className="space-y-6">
-          
-          {/* AUTO-DISCOVERY QUICK CTA BANNER */}
-          <div className="bg-gradient-to-r from-purple-950/80 via-slate-900 to-indigo-950/80 border border-purple-800/60 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
-            <div className="flex items-center gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-purple-600/30 border border-purple-500/50 flex items-center justify-center text-2xl shrink-0 shadow-lg shadow-purple-500/20">
-                ✨
-              </div>
-              <div>
-                <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
-                  AUTO-DISCOVERY DE RECURSOS MCP & TEMPLATES DE DESIGN
-                  <span className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-purple-950 text-purple-300 border border-purple-700 uppercase">
-                    Novo Motor IA
-                  </span>
-                </h4>
-                <p className="text-[11px] text-slate-300 mt-0.5">
-                  Escaneie automaticamente os 6 servidores MCP conectados e veja os templates recomendados para o nicho e regras do seu projeto.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTab('discovery')}
-              className="px-4 py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold rounded-2xl text-xs transition-all shadow-md shrink-0 flex items-center gap-1.5 active:scale-95"
-            >
-              <span>🔍 Abrir Auto-Discovery</span>
-              <span>→</span>
-            </button>
-          </div>
-
-          {/* NOTION MCP WORKSPACE & INTEGRATION CARD */}
-          <div className="bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border border-blue-800/60 rounded-3xl p-6 space-y-5 shadow-xl">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-blue-800/40 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-500 via-indigo-600 to-purple-600 flex items-center justify-center text-xl shadow-lg shadow-blue-500/20">
-                  📝
-                </div>
-                <div>
-                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2 tracking-wide">
-                    NOTION MCP WORKSPACE & DESIGN DIRECTIVES
-                    <span className="text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">
-                      ● Ativo em Todas as Páginas & Fluxos
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-300 mt-0.5">
-                    O Notion MCP está conectado para orientar e aprimorar cada fluxo de automação e página HTML gerada. As diretrizes do seu Notion são injetadas automaticamente no Cérebro da IA.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">
-                    Notion Page ID / Workspace URL:
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: 17b92f9823a480a880..."
-                    value={notionPageId}
-                    onChange={(e) => {
-                      setNotionPageId(e.target.value);
-                      if (typeof window !== 'undefined') localStorage.setItem('NOTION_MCP_PAGE_ID', e.target.value);
-                    }}
-                    className="w-full bg-slate-950 border border-blue-900/80 rounded-2xl px-4 py-2.5 text-xs text-white font-mono outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">
-                    Notion Integration Token (Opcional):
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Ex: secret_xyz123..."
-                    value={notionToken}
-                    onChange={(e) => {
-                      setNotionToken(e.target.value);
-                      if (typeof window !== 'undefined') localStorage.setItem('NOTION_MCP_TOKEN', e.target.value);
-                    }}
-                    className="w-full bg-slate-950 border border-blue-900/80 rounded-2xl px-4 py-2.5 text-xs text-white font-mono outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-[11px] text-blue-300 font-mono">
-                  ⚡ O Notion MCP fornecerá automaticamente diretrizes de tipografia, Bento Grids e Callouts profissionais.
-                </span>
-                <button
-                  type="button"
-                  onClick={handleFetchNotionBriefing}
-                  disabled={isFetchingNotion}
-                  className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold rounded-2xl text-xs transition-all shadow-md shrink-0 flex items-center gap-2"
-                >
-                  {isFetchingNotion ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                      <span>Sincronizando Notion...</span>
-                    </>
-                  ) : (
-                    <span>🔄 Sincronizar Briefing do Notion MCP</span>
-                  )}
-                </button>
-              </div>
-
-              {notionResult && (
-                <div className="bg-slate-950 border border-blue-800/80 rounded-2xl p-4 text-xs font-mono text-blue-200 animate-fadeIn space-y-2">
-                  <div className="flex items-center justify-between text-white font-bold border-b border-slate-800 pb-2">
-                    <span>✨ Briefing & Diretrizes do Notion Sincronizados</span>
-                    <span className="text-[10px] text-emerald-400 font-normal">● Gravado no Cérebro da IA</span>
-                  </div>
-                  <p className="text-slate-300 leading-relaxed font-sans">{notionResult.briefing}</p>
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {notionResult.designRules?.map((rule: string, idx: number) => (
-                      <span key={idx} className="bg-blue-950/80 border border-blue-800 text-blue-200 px-2.5 py-1 rounded-xl text-[10px]">
-                        ✓ {rule}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* FIGMA MCP TOKEN & WORKFLOW CONFIGURATION CARD */}
-          <div className="bg-gradient-to-r from-purple-950/80 via-slate-900 to-indigo-950/80 border border-purple-800/60 rounded-3xl p-6 space-y-5 shadow-xl">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-purple-800/40 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 via-purple-600 to-indigo-600 flex items-center justify-center text-xl shadow-lg shadow-purple-500/20">
-                  🎨
-                </div>
-                <div>
-                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2 tracking-wide">
-                    FIGMA MCP SERVER & SECURE TOKEN SETTINGS
-                    <span className={`text-[9px] px-2.5 py-0.5 rounded-full font-bold uppercase border ${
-                      figmaTokenSaved
-                        ? 'bg-emerald-950 text-emerald-300 border-emerald-800 shadow-sm shadow-emerald-950'
-                        : 'bg-amber-950 text-amber-300 border-amber-800'
-                    }`}>
-                      {figmaTokenSaved ? '● Figma Token Ativo (Protegido)' : '○ Nenhum Token Salvo'}
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-300 mt-0.5">
-                    Integração oficial Figma MCP. Conecte seu Personal Access Token (PAT) para extração de frames, cores e tipografia armazenados na memória do projeto.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* SECURE TOKEN INPUT FORM */}
-            <form onSubmit={handleSaveFigmaToken} className="space-y-3">
-              <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                <span>Figma Personal Access Token (PAT):</span>
-                <span className="text-[10px] text-slate-400 font-normal">Armazenado em local secure storage</span>
-              </label>
-
-              <div className="flex flex-col sm:flex-row items-center gap-2">
-                <div className="relative flex-1 w-full">
-                  <input
-                    type={showTokenSecret ? 'text' : 'password'}
-                    placeholder="Cole seu Figma PAT (Ex: figd_9x8a7b6c5d4e...)"
-                    value={figmaToken}
-                    onChange={(e) => {
-                      setFigmaToken(e.target.value);
-                      setFigmaTokenSaved(false);
-                    }}
-                    className="w-full bg-slate-950 border border-purple-900/80 rounded-2xl pl-4 pr-10 py-2.5 text-xs text-white font-mono outline-none focus:border-purple-500 shadow-inner"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowTokenSecret(!showTokenSecret)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs font-bold p-1"
-                    title={showTokenSecret ? 'Ocultar Token' : 'Mostrar Token'}
-                  >
-                    {showTokenSecret ? '🙈' : '👁️'}
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md w-full sm:w-auto flex items-center justify-center gap-1.5"
-                  >
-                    <span>💾</span>
-                    <span>Salvar Token</span>
-                  </button>
-
-                  {figmaToken && (
-                    <button
-                      type="button"
-                      onClick={handleClearFigmaToken}
-                      className="px-3.5 py-2.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-2xl text-xs font-bold transition-all w-full sm:w-auto flex items-center justify-center gap-1"
-                      title="Remover token do armazenamento"
-                    >
-                      <span>🗑️</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {saveNotification && (
-                <div className="p-3 bg-slate-950 border border-purple-800/80 rounded-2xl text-xs font-mono text-purple-200 animate-fadeIn flex items-center gap-2">
-                  <span>{saveNotification}</span>
-                </div>
-              )}
-            </form>
-
-            {/* WORKFLOW TOOL: IMPORT DESIGN */}
-            <div className="pt-4 border-t border-purple-800/40 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-black text-purple-300 font-mono uppercase tracking-wider flex items-center gap-2">
-                  <span>⚡ MCP TOOL: IMPORT DESIGN</span>
-                  <span className="text-[10px] bg-purple-900/80 text-purple-200 px-2 py-0.5 rounded-full border border-purple-700">
-                    figma_import_design
-                  </span>
-                </span>
-                
-                <button
-                  type="button"
-                  onClick={() => setTestFigmaUrl('https://www.figma.com/design/M8kX9aP2q/App-Design-System-2026?node-id=12%3A45')}
-                  className="text-[11px] text-purple-400 hover:text-purple-200 underline font-mono text-left"
-                >
-                  🧪 Inserir URL de Exemplo do Figma
-                </button>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="Cole a URL do Figma (Ex: https://www.figma.com/design/XYZ123/Project-Name)"
-                  value={testFigmaUrl}
-                  onChange={(e) => setTestFigmaUrl(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-white font-mono outline-none focus:border-indigo-500 w-full"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleImportDesign()}
-                  disabled={isTestingFigma || !testFigmaUrl.trim()}
-                  className="px-5 py-2.5 bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 disabled:opacity-50 text-white font-bold rounded-2xl text-xs transition-all shadow-lg shadow-purple-600/20 shrink-0 w-full sm:w-auto flex items-center justify-center gap-2"
-                >
-                  {isTestingFigma ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                      <span>Extraindo Tokens do Figma...</span>
-                    </>
-                  ) : (
-                    <span>🚀 IMPORT DESIGN FROM FIGMA</span>
-                  )}
-                </button>
-              </div>
-
-              {/* BRAIN ENGINE ACTIVE PROJECT DESIGN MEMORY CARD */}
-              {projectDesignMemory && (
-                <div className="bg-slate-950 border border-emerald-800/80 rounded-2xl p-5 space-y-4 text-xs font-mono shadow-xl animate-fadeIn">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-emerald-950 border border-emerald-700 flex items-center justify-center text-base">
-                        🧠
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-black text-white flex items-center gap-2">
-                          MEMÓRIA ATIVA DE DESIGN (BRAIN ENGINE)
-                          <span className="text-[9px] bg-emerald-900/90 text-emerald-200 border border-emerald-700 px-2 py-0.5 rounded-full font-mono uppercase">
-                            {projectDesignMemory.sourceApi}
-                          </span>
-                        </h4>
-                        <span className="text-[10px] text-slate-400">
-                          {projectDesignMemory.designName} • Importado em {projectDesignMemory.importedAt}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleImportDesign(projectDesignMemory.figmaUrl)}
-                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1"
-                        title="Re-sincronizar esta URL do Figma"
-                      >
-                        <span>🔄</span> Re-sincronizar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleClearDesignMemory}
-                        className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1"
-                        title="Remover memória de design ativa"
-                      >
-                        <span>🗑️</span> Limpar
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* COLOR TOKENS SWATCHES */}
-                  {projectDesignMemory.colors && (
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
-                        🎨 Color Tokens na Memória:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(projectDesignMemory.colors).map(([key, val]) => (
-                          <div
-                            key={key}
-                            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 flex items-center gap-2 shrink-0 shadow-sm"
-                          >
-                            <span
-                              className="w-4 h-4 rounded-full border border-white/20 shadow-md"
-                              style={{ backgroundColor: String(val) }}
-                            />
-                            <div className="text-[10px]">
-                              <span className="text-slate-400 capitalize">{key}: </span>
-                              <span className="text-white font-bold font-mono">{String(val)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TYPOGRAPHY TOKENS */}
-                  {projectDesignMemory.typography && (
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
-                        🔤 Typo Tokens na Memória:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-xl text-[10px]">
-                          Títulos: <strong className="text-white">{projectDesignMemory.typography.headingFont}</strong>
-                        </span>
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-xl text-[10px]">
-                          Corpo: <strong className="text-white">{projectDesignMemory.typography.bodyFont}</strong>
-                        </span>
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-xl text-[10px]">
-                          Scale Ratio: <strong className="text-white">{projectDesignMemory.typography.scaleRatio}</strong>
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* FRAME NODES LIST */}
-                  {projectDesignMemory.frames && projectDesignMemory.frames.length > 0 && (
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
-                        📐 Frame Nodes Mapeados na Memória:
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {projectDesignMemory.frames.map((frameName: string, idx: number) => (
-                          <span
-                            key={idx}
-                            className="bg-emerald-950/80 border border-emerald-800 text-emerald-200 px-2.5 py-1 rounded-xl text-[10px]"
-                          >
-                            ❖ {frameName}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* RICH IMPORT RESULTS DISPLAY */}
-              {testFigmaResult && (
-                <div className="bg-slate-950 border border-purple-800/80 rounded-2xl p-4 space-y-4 text-xs font-mono animate-fadeIn">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">✨</span>
-                      <div>
-                        <h4 className="text-xs font-bold text-white">
-                          {testFigmaResult.designName || 'Design Importado do Figma'}
-                        </h4>
-                        <span className="text-[10px] text-slate-400">
-                          FileKey: {testFigmaResult.fileKey || 'N/A'} | Token: {testFigmaResult.tokenUsedMasked || 'OK'}
-                        </span>
-                      </div>
-                    </div>
-                    {testFigmaResult.designMemorySaved && (
-                      <span className="text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2.5 py-1 rounded-full flex items-center gap-1">
-                        <span>🧠</span> Salvo na Memória do Projeto
-                      </span>
-                    )}
-                  </div>
-
-                  {/* COLOR TOKENS SWATCHES */}
-                  {testFigmaResult.colors && (
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold text-purple-300 uppercase block">
-                        🎨 Color Tokens Extraídos:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(testFigmaResult.colors).map(([key, val]) => (
-                          <div
-                            key={key}
-                            className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 flex items-center gap-2 shrink-0"
-                          >
-                            <span
-                              className="w-3.5 h-3.5 rounded-full border border-white/20 shadow-sm"
-                              style={{ backgroundColor: String(val) }}
-                            />
-                            <div className="text-[10px]">
-                              <span className="text-slate-400 capitalize">{key}: </span>
-                              <span className="text-white font-bold">{String(val)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TYPOGRAPHY TOKENS */}
-                  {testFigmaResult.typography && (
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold text-purple-300 uppercase block">
-                        🔤 Typo Tokens Extraídos:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-2.5 py-1 rounded-xl text-[10px]">
-                          Títulos: <strong className="text-white">{testFigmaResult.typography.headingFont}</strong>
-                        </span>
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-2.5 py-1 rounded-xl text-[10px]">
-                          Corpo: <strong className="text-white">{testFigmaResult.typography.bodyFont}</strong>
-                        </span>
-                        <span className="bg-slate-900 border border-slate-800 text-slate-200 px-2.5 py-1 rounded-xl text-[10px]">
-                          Escala: <strong className="text-white">{testFigmaResult.typography.scaleRatio}</strong>
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* FRAME NODES LIST */}
-                  {testFigmaResult.frames && Array.isArray(testFigmaResult.frames) && (
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold text-purple-300 uppercase block">
-                        📐 Frame Nodes Mapeados:
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {testFigmaResult.frames.map((frameName: string, idx: number) => (
-                          <span
-                            key={idx}
-                            className="bg-purple-950/80 border border-purple-800 text-purple-200 px-2.5 py-1 rounded-xl text-[10px]"
-                          >
-                            ❖ {frameName}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* RAW JSON INSPECTOR */}
-                  <details className="pt-2 border-t border-slate-900">
-                    <summary className="text-[10px] text-slate-400 hover:text-white cursor-pointer select-none">
-                      🔍 Inspecionar Payload JSON Bruto do MCP
-                    </summary>
-                    <pre className="mt-2 text-[10px] text-purple-200 overflow-x-auto max-h-40 custom-scrollbar p-3 bg-slate-900 rounded-xl border border-slate-800">
-                      {JSON.stringify(testFigmaResult, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {tools.map((tool) => (
               <div
@@ -900,9 +1075,9 @@ export const McpToolsPanel: React.FC = () => {
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono text-slate-500">
-                  <span>Schema: JSON Object</span>
+                  <span>{tool.isDynamic ? 'Notion MCP (Dinâmica)' : 'Local Gateway'}</span>
                   <span className={tool.enabled ? 'text-emerald-400 font-bold' : 'text-slate-600'}>
-                    {tool.enabled ? '● Ativo' : '○ Inativo'}
+                    {tool.enabled ? '● Ativa' : '○ Inativa'}
                   </span>
                 </div>
               </div>
@@ -911,118 +1086,22 @@ export const McpToolsPanel: React.FC = () => {
         </div>
       )}
 
-      {/* --- TAB: SERVERS --- */}
-      {activeTab === 'servers' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between bg-slate-900/80 border border-slate-800 p-4 rounded-2xl">
-            <div>
-              <h3 className="text-sm font-extrabold text-white">Servidores de Inteligência MCP Registrados</h3>
-              <p className="text-xs text-slate-400">Conectores de Browser Automation, FileSystem local, Figma e integrações remotas</p>
-            </div>
-            <button
-              onClick={() => setShowAddServerModal(!showAddServerModal)}
-              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
-            >
-              <span>➕</span>
-              <span>Conectar Servidor MCP</span>
-            </button>
-          </div>
-
-          {showAddServerModal && (
-            <form onSubmit={handleRegisterServer} className="bg-slate-900 border border-indigo-500/50 p-5 rounded-2xl space-y-4 animate-fadeIn">
-              <h4 className="text-xs font-bold text-indigo-300 uppercase font-mono tracking-wider">
-                🔌 Registrar Novo Servidor MCP Remoto
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1">Nome do Servidor</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Local Playwright MCP"
-                    value={newServerName}
-                    onChange={(e) => setNewServerName(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1">URL / Endpoint do Servidor</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: http://localhost:8080/mcp ou https://mcp.figma.com/v1"
-                    value={newServerEndpoint}
-                    onChange={(e) => setNewServerEndpoint(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[11px] font-bold text-slate-400 block mb-1">Descrição do Servidor</label>
-                <input
-                  type="text"
-                  placeholder="Ex: Servidor MCP para testes de navegação e extração DOM em tempo real"
-                  value={newServerDesc}
-                  onChange={(e) => setNewServerDesc(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddServerModal(false)}
-                  className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-700 transition-all"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-500 transition-all shadow-md"
-                >
-                  Salvar e Registrar Servidor
-                </button>
-              </div>
-            </form>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {servers.map((srv) => (
-              <div key={srv.id} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex items-start justify-between">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <h3 className="text-sm font-extrabold text-white">{srv.name}</h3>
-                  </div>
-                  <p className="text-xs text-slate-400 leading-relaxed max-w-md">
-                    {srv.description}
-                  </p>
-                  {srv.endpoint && (
-                    <div className="text-[10px] font-mono text-indigo-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 inline-block">
-                      Endpoint: {srv.endpoint}
-                    </div>
-                  )}
-                  <div className="text-[11px] font-mono text-indigo-300">
-                    {srv.toolsCount} Ferramentas integradas registradas
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-end gap-2">
-                  <span className="px-3 py-1 bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-bold rounded-full uppercase">
-                    {srv.status}
-                  </span>
-                  {srv.id.startsWith('mcp-server-') && (
-                    <button
-                      onClick={() => handleRemoveServer(srv.id)}
-                      className="text-[10px] text-rose-400 hover:text-rose-300 underline font-mono"
-                    >
-                      Remover
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* --- TAB: DISCOVERY --- */}
+      {activeTab === 'discovery' && (
+        <McpAutoDiscoveryView
+          servers={servers}
+          tools={tools}
+          projectDesignMemory={projectDesignMemory}
+          activeTemplateId={activeTemplateId}
+          onSelectTemplate={(tpl) => {
+            setActiveTemplateId(tpl.id);
+            if (typeof window !== 'undefined') localStorage.setItem('NOTION_MCP_PAGE_TEMPLATE_ID', tpl.id);
+          }}
+          onGenerateWithCoPilot={(tpl) => {
+            mcpService.triggerMcpCoPilotBuildSession(`Construir página com template ${tpl.title}`);
+          }}
+          onNavigateToTab={(t) => setActiveTab(t as any)}
+        />
       )}
 
       {/* --- TAB: PERMISSIONS --- */}
@@ -1031,7 +1110,7 @@ export const McpToolsPanel: React.FC = () => {
           <div>
             <h2 className="text-sm font-extrabold text-white">Matriz de Permissões por Agente de IA</h2>
             <p className="text-xs text-slate-400">
-              Controle estritamente quais ferramentas cada Agente de Design pode acionar.
+              Controle estritamente quais ferramentas cada Agente de Design e Contexto pode acionar.
             </p>
           </div>
 
@@ -1048,15 +1127,14 @@ export const McpToolsPanel: React.FC = () => {
                     return (
                       <button
                         key={t.id}
-                        type="button"
                         onClick={() => handleTogglePermission(perm.agentRole, t.id)}
-                        className={`text-xs px-3 py-1.5 rounded-xl border font-mono transition-all flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-all flex items-center gap-1.5 ${
                           isAllowed
-                            ? 'bg-indigo-950 text-indigo-200 border-indigo-600/60 shadow-sm'
-                            : 'bg-slate-900 text-slate-600 border-slate-800 hover:text-slate-400'
+                            ? 'bg-indigo-950 text-indigo-300 border border-indigo-700 font-bold'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800 hover:text-slate-300'
                         }`}
                       >
-                        <span>{isAllowed ? '✓' : '✗'}</span>
+                        <span>{isAllowed ? '✓' : '+'}</span>
                         <span>{t.name}</span>
                       </button>
                     );
@@ -1068,62 +1146,136 @@ export const McpToolsPanel: React.FC = () => {
         </div>
       )}
 
-      {/* --- TAB: LOGS --- */}
+      {/* --- TAB: AUDIT LOGS --- */}
       {activeTab === 'logs' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-              Auditoria de Execução de Ferramentas MCP
-            </h3>
-            <span className="text-[10px] font-mono text-slate-400">
-              {logs.length} Registros na sessão
-            </span>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-extrabold text-white">Audit Trail & Histórico MCP ({logs.length})</h3>
+            <button
+              onClick={() => setLogs([])}
+              className="text-xs text-rose-400 hover:text-rose-300 font-mono"
+            >
+              Limpar Logs
+            </button>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950 text-slate-400 uppercase text-[9px] tracking-wider border-b border-slate-800">
-                <tr>
-                  <th className="p-3">Horário</th>
-                  <th className="p-3">Agente</th>
-                  <th className="p-3">Ferramenta MCP</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3">Duração</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 text-slate-300 font-mono text-[11px]">
-                {logs.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-6 text-center text-slate-500 font-sans">
-                      Nenhuma chamada de ferramenta MCP registrada ainda. Interaja com os Agentes de Design para ver logs.
-                    </td>
-                  </tr>
-                ) : (
-                  logs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-800/50 transition-colors">
-                      <td className="p-3 text-slate-500">
-                        {new Date(log.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td className="p-3 font-sans font-bold text-indigo-300">{log.agentRole}</td>
-                      <td className="p-3 text-white font-bold">{log.toolName}</td>
-                      <td className="p-3">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                          log.status === 'SUCCESS' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' :
-                          log.status === 'DENIED' ? 'bg-amber-950 text-amber-400 border border-amber-800/60' : 'bg-rose-950 text-rose-400'
-                        }`}>
-                          {log.status}
-                        </span>
-                      </td>
-                      <td className="p-3 text-slate-400">{log.durationMs}ms</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          <div className="space-y-2 max-h-[600px] overflow-y-auto custom-scrollbar">
+            {logs.length === 0 ? (
+              <p className="text-xs text-slate-500 italic py-4 text-center">Nenhum evento registrado ainda.</p>
+            ) : (
+              logs.map((log) => (
+                <div
+                  key={log.id}
+                  className="bg-slate-950 border border-slate-800/80 rounded-xl p-3.5 text-xs font-mono space-y-1.5"
+                >
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span className="text-indigo-300 font-bold">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                    <span className={`px-2 py-0.5 rounded-full font-bold uppercase ${
+                      log.status === 'SUCCESS' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'
+                    }`}>
+                      {log.status}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-bold">{log.toolName}</span>
+                    <span className="text-slate-500">via {log.agentRole}</span>
+                    <span className="text-slate-600 ml-auto">{log.durationMs}ms</span>
+                  </div>
+
+                  {log.outputResult && (
+                    <pre className="text-[10px] text-slate-400 bg-slate-900/80 p-2 rounded-lg overflow-x-auto">
+                      {JSON.stringify(log.outputResult, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
 
+      {/* MODAL DE CONEXÃO AO NOTION MCP */}
+      {showConnectModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-blue-900/80 rounded-3xl p-6 max-w-lg w-full space-y-5 shadow-2xl animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white text-black flex items-center justify-center font-bold text-lg">
+                  N
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">Conectar Notion MCP Server</h3>
+                  <span className="text-[10px] text-blue-300 font-mono">https://mcp.notion.com/mcp</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowConnectModal(false)}
+                className="text-slate-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-slate-300 block">
+                Notion Internal Integration Token ou OAuth Token:
+              </label>
+              <input
+                type="password"
+                placeholder="secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                value={notionToken}
+                onChange={(e) => setNotionToken(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-white font-mono outline-none focus:border-blue-500 shadow-inner"
+              />
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Você pode obter o token em <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="text-blue-400 underline">notion.so/my-integrations</a>. O token é gerenciado com segurança pelo servidor MCP Gateway.
+              </p>
+            </div>
+
+            {notionError && (
+              <div className="p-3 bg-rose-950 border border-rose-800 rounded-xl text-xs font-mono text-rose-200">
+                {notionError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowConnectModal(false)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-700 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConnectNotion}
+                disabled={isConnectingNotion}
+                className="px-5 py-2.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all shadow-md flex items-center gap-2"
+              >
+                {isConnectingNotion ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    <span>Conectando e Descobrindo Tools...</span>
+                  </>
+                ) : (
+                  <span>Conectar e Descobrir Tools</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE GERENCIAMENTO DE VARIÁVEIS / CREDENCIAIS (ENGRENAGENZINHA ⚙️) */}
+      <IntegrationVariablesModal
+        isOpen={isVariablesModalOpen}
+        onClose={() => setIsVariablesModalOpen(false)}
+        initialCategory={variablesModalCategory}
+        initialVariableId={variablesModalVarId}
+      />
+
     </div>
   );
 };
+

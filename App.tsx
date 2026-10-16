@@ -34,6 +34,7 @@ import { SubflowModal } from './components/SubflowModal';
 import { CommandPaletteModal, CommandItem } from './components/CommandPaletteModal';
 import { DesignLabView } from './components/DesignLabView';
 import { McpToolsPanel } from './components/McpToolsPanel';
+import { IntegrationVariablesModal, VariableGearButton } from './components/IntegrationVariablesModal';
 import { INITIAL_NODES, INITIAL_EDGES, APP_NAME } from './constants';
 import { FlowEngine } from './services/flowEngine';
 import { storageService } from './services/storageService'; 
@@ -98,6 +99,7 @@ const App = () => {
   const [terminalSubTab, setTerminalSubTab] = useState<'logs' | 'files' | 'graph'>('logs');
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isVariablesModalOpen, setIsVariablesModalOpen] = useState(false);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false); 
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false); 
@@ -993,6 +995,12 @@ const App = () => {
             </div>
           </div>
         )}
+
+        {/* MODAL GLOBAL DE VARIÁVEIS E CREDENCIAIS (ENGRENAGENZINHA) */}
+        <IntegrationVariablesModal
+          isOpen={isVariablesModalOpen}
+          onClose={() => setIsVariablesModalOpen(false)}
+        />
       </div>
     </ReactFlowProvider>
   );
